@@ -1,0 +1,33 @@
+name: Daily Link Check
+
+on:
+  schedule:
+    # Runs every day at 9 AM UTC (adjust the time as needed)
+    # Format: minute hour day month day-of-week
+    - cron: '0 9 * * *'
+  
+  # Also allow manual trigger from Actions tab
+  workflow_dispatch:
+
+jobs:
+  check-links:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4
+      
+      - name: Run link check
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python check_links.py
