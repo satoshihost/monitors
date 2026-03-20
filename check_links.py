@@ -28,16 +28,26 @@ TARGET_URL = "https://clickforcharity.net/ptc.html"
 LINKS_TO_CHECK = 2
 
 def get_all_links(url):
-    """Fetch the page and extract all links"""
+    """Fetch the page and extract task links from task-list-container"""
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         links = []
-        for link in soup.find_all('a', href=True):
+        
+        # Find the task-list-container element
+        task_container = soup.find('section', class_='task-list-container')
+        
+        if not task_container:
+            send_telegram(f"❌ Could not find task-list-container on {TARGET_URL}")
+            sys.exit(1)
+        
+        # Find all a.btn-visit links within the container
+        for link in task_container.find_all('a', class_='btn-visit', href=True):
             href = link['href']
             if href.startswith('http'):
                 links.append(href)
+        
         return links
     except Exception as e:
         send_telegram(f"❌ Failed to fetch {TARGET_URL}: {str(e)}")
