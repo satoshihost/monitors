@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-Check random links from Click for Charity PTC page
-Reports status via Telegram bot
+Check random links from Click for Charity PTC page using a real browser.
+Uses Playwright to load the page and wait for JavaScript to render the task list,
+then checks that the links are reachable.
+Reports status via Telegram bot.
 """
 
 import requests
-from bs4 import BeautifulSoup
 import random
 import os
 import sys
 from datetime import datetime
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 # Configuration - EDIT THESE TO ADD/REMOVE EXCLUDED LINKS
 EXCLUDED_DOMAINS = [
@@ -27,34 +29,44 @@ TARGET_URL = "https://clickforcharity.net/ptc.html"
 # Number of links to check per run
 LINKS_TO_CHECK = 2
 
-def get_all_links(url):
-    """Fetch the page and extract task links from task-list-container"""
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
-        links = []
-        
-        # Find the task-list-container element
-        task_container = soup.find('section', class_='task-list-container')
-        
-        if not task_container:
-            send_telegram(f"❌ Could not find task-list-container on {TARGET_URL}")
+# How long to wait for tasks to appear after JS renders (ms)
+TASK_RENDER_TIMEOUT_MS = 15000
+
+def get_all_links():
+    """Load ptc.html in a real browser and extract task links after JS renders them"""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        try:
+            print(f"Loading {TARGET_URL} ...")
+            page.goto(TARGET_URL, timeout=30000)
+
+            # Wait for at least one btn-visit link to appear in the task list
+            page.wait_for_selector("#task-list a.btn-visit", timeout=TASK_RENDER_TIMEOUT_MS)
+
+        except PlaywrightTimeout:
+            browser.close()
+            send_telegram(f"❌ <b>PTC page failed to render tasks</b>\nNo task links appeared within {TASK_RENDER_TIMEOUT_MS // 1000}s on {TARGET_URL}\nPage may be down or JS broken.")
             sys.exit(1)
-        
-        # Find all a.btn-visit links within the container
-        for link in task_container.find_all('a', class_='btn-visit', href=True):
-            href = link['href']
-            if href.startswith('http'):
+        except Exception as e:
+            browser.close()
+            send_telegram(f"❌ <b>Failed to load PTC page</b>\n{TARGET_URL}\nError: {str(e)}")
+            sys.exit(1)
+
+        # Extract all btn-visit hrefs
+        link_elements = page.query_selector_all("#task-list a.btn-visit")
+        links = []
+        for el in link_elements:
+            href = el.get_attribute("href") or ""
+            if href.startswith("http"):
                 links.append(href)
-        
+
+        browser.close()
         return links
-    except Exception as e:
-        send_telegram(f"❌ Failed to fetch {TARGET_URL}: {str(e)}")
-        sys.exit(1)
 
 def is_excluded(url):
-    """Check if URL should be excluded (paid links, etc)"""
+    """Check if URL should be excluded (paid rotation links)"""
     url_lower = url.lower()
     for domain in EXCLUDED_DOMAINS:
         if domain.lower() in url_lower:
@@ -62,7 +74,7 @@ def is_excluded(url):
     return False
 
 def check_link(url):
-    """Check if a link is working (returns 200)"""
+    """Check if a link is reachable (returns 200)"""
     try:
         response = requests.head(url, timeout=10, allow_redirects=True)
         return response.status_code == 200, response.status_code
@@ -90,37 +102,38 @@ def send_telegram(message):
 
 def main():
     print(f"[{datetime.now().isoformat()}] Starting link check...")
-    
-    # Get all links from the page
-    all_links = get_all_links(TARGET_URL)
+
+    # Load the page with a real browser and extract rendered task links
+    all_links = get_all_links()
     print(f"Found {len(all_links)} total links")
-    
-    # Filter out excluded links
+
+    # Filter out excluded (paid rotation) links
     available_links = [link for link in all_links if not is_excluded(link)]
-    print(f"Available to check: {len(available_links)} (excluded: {len(all_links) - len(available_links)})")
-    
+    excluded_count = len(all_links) - len(available_links)
+    print(f"Available to check: {len(available_links)} (excluded: {excluded_count})")
+
     if len(available_links) < LINKS_TO_CHECK:
-        send_telegram(f"⚠️ Not enough links to check! Available: {len(available_links)}, need: {LINKS_TO_CHECK}")
+        send_telegram(f"⚠️ <b>PTC Links Check: not enough links</b>\nAvailable: {len(available_links)}, need: {LINKS_TO_CHECK}\n{TARGET_URL}")
         return
-    
-    # Pick random links
+
+    # Pick random links to test
     links_to_test = random.sample(available_links, LINKS_TO_CHECK)
-    
+
     print(f"Checking {len(links_to_test)} random links...")
     results = []
     all_ok = True
-    
+
     for link in links_to_test:
         working, status = check_link(link)
         results.append((link, working, status))
         print(f"  {link}: {'✅' if working else '❌'} ({status})")
         if not working:
             all_ok = False
-    
+
     # Build Telegram message
     if all_ok:
         message = f"✅ <b>PTC Links Check OK</b>\n"
-        message += f"Checked 2 random links on {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC\n"
+        message += f"Checked {LINKS_TO_CHECK} random links on {datetime.now().strftime('%Y-%m-%d %H:%M')} UTC\n"
         message += "All working!"
     else:
         message = f"❌ <b>PTC Links Check FAILED</b>\n"
@@ -131,8 +144,7 @@ def main():
         for link, working, status in results:
             if working:
                 message += f"✅ {link}\n"
-    
-    # Send to Telegram
+
     success = send_telegram(message)
     if success:
         print("✅ Telegram message sent")
