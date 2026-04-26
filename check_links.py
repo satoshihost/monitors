@@ -30,40 +30,57 @@ TARGET_URL = "https://clickforcharity.net/ptc.html"
 LINKS_TO_CHECK = 2
 
 # How long to wait for tasks to appear after JS renders (ms)
-TASK_RENDER_TIMEOUT_MS = 15000
+TASK_RENDER_TIMEOUT_MS = 30000
+
+# How many times to retry before sending an alert
+MAX_RETRIES = 2
 
 def get_all_links():
-    """Load ptc.html in a real browser and extract task links after JS renders them"""
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
+    """Load ptc.html in a real browser and extract task links after JS renders them.
+    Retries up to MAX_RETRIES times before sending an alert."""
+    last_error = None
 
-        try:
-            print(f"Loading {TARGET_URL} ...")
-            page.goto(TARGET_URL, timeout=30000)
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"Attempt {attempt}/{MAX_RETRIES}: loading {TARGET_URL} ...")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
 
-            # Wait for at least one btn-visit link to appear in the task list
-            page.wait_for_selector("#task-list a.btn-visit", timeout=TASK_RENDER_TIMEOUT_MS)
+            try:
+                page.goto(TARGET_URL, timeout=30000)
 
-        except PlaywrightTimeout:
+                # Wait for at least one btn-visit link to appear in the task list
+                page.wait_for_selector("#task-list a.btn-visit", timeout=TASK_RENDER_TIMEOUT_MS)
+
+            except PlaywrightTimeout:
+                browser.close()
+                last_error = "timeout"
+                print(f"  Attempt {attempt} timed out after {TASK_RENDER_TIMEOUT_MS // 1000}s")
+                continue
+            except Exception as e:
+                browser.close()
+                last_error = str(e)
+                print(f"  Attempt {attempt} failed: {e}")
+                continue
+
+            # Extract all btn-visit hrefs
+            link_elements = page.query_selector_all("#task-list a.btn-visit")
+            links = []
+            for el in link_elements:
+                href = el.get_attribute("href") or ""
+                if href.startswith("http"):
+                    links.append(href)
+
             browser.close()
-            send_telegram(f"❌ <b>PTC page failed to render tasks</b>\nNo task links appeared within {TASK_RENDER_TIMEOUT_MS // 1000}s on {TARGET_URL}\nPage may be down or JS broken.")
-            sys.exit(1)
-        except Exception as e:
-            browser.close()
-            send_telegram(f"❌ <b>Failed to load PTC page</b>\n{TARGET_URL}\nError: {str(e)}")
-            sys.exit(1)
+            return links
 
-        # Extract all btn-visit hrefs
-        link_elements = page.query_selector_all("#task-list a.btn-visit")
-        links = []
-        for el in link_elements:
-            href = el.get_attribute("href") or ""
-            if href.startswith("http"):
-                links.append(href)
+    # All attempts failed
+    if last_error == "timeout":
+        send_telegram(f"❌ <b>PTC page failed to render tasks</b>\nNo task links appeared within {TASK_RENDER_TIMEOUT_MS // 1000}s on {TARGET_URL} (tried {MAX_RETRIES}x)\nPage may be down or JS broken.")
+    else:
+        send_telegram(f"❌ <b>Failed to load PTC page</b>\n{TARGET_URL} (tried {MAX_RETRIES}x)\nError: {last_error}")
+    sys.exit(1)
 
-        browser.close()
-        return links
 
 def is_excluded(url):
     """Check if URL should be excluded (paid rotation links)"""
