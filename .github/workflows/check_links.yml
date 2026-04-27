@@ -1,12 +1,6 @@
 name: Daily Link Check
 
 on:
-  schedule:
-    # Runs every day at 9 AM UTC (adjust the time as needed)
-    # Format: minute hour day month day-of-week
-    - cron: '0 9 * * *'
-  
-  # Also allow manual trigger from Actions tab
   workflow_dispatch:
 
 jobs:
