@@ -1,157 +1,96 @@
 # SatoshiHost Monitoring
 
-Automated monitoring and health checks for SatoshiHost infrastructure and services. All checks report to the **@satoshihost** Telegram group. Zero cost - runs on GitHub Actions.
+Central index for all automated monitoring across SatoshiHost infrastructure.
+Alerts go to Telegram. (Matrix/Element fallback is dormant since 2026-10-21 — see ALERTING-PLAN.md to re-enable.)
 
-## 🎯 Current Monitors
+See [ALERTING-PLAN.md](ALERTING-PLAN.md) for architecture, credentials, and deployment details.
 
-| Monitor | Purpose | Schedule | Status |
-|---------|---------|----------|--------|
-| **Link Checker** | Verifies links on [Click for Charity PTC page](https://clickforcharity.net/ptc.html) work correctly | Daily 9 AM UTC | ✅ Active |
-| **API Health** | *(Coming soon)* | - | 🔄 Planned |
-| **DNS Resolution** | *(Coming soon)* | - | 🔄 Planned |
-| **SSL Certificate** | *(Coming soon)* | - | 🔄 Planned |
-
-> **Note:** VPS-based monitors (backups, server security) run directly on the auth server and are separate from this repo.
+**Planned:** per-push CI on all DirectSponsor / satoshihost repos → Telegram on failure — [github-push-checks.md](github-push-checks.md)
 
 ---
 
-## 🚀 Quick Start
+## All Active Monitors
 
-### Setup (First Time Only)
+### GitHub Actions (this repo)
 
-1. **Add Telegram Secrets** to this repo:
-   - Go to **Settings → Secrets and variables → Actions**
-   - Add `TELEGRAM_BOT_TOKEN`
-   - Add `TELEGRAM_CHAT_ID`
-   - (See details in specific monitor docs)
+| Monitor | Script | Trigger | Alerts via |
+|---------|--------|---------|------------|
+| CFC link checker | `check_links.py` | manual (Actions tab) | Telegram direct |
 
-2. **Choose your monitor(s)** and follow setup:
-   - [Link Checker Setup](docs/SETUP-links.md)
-   - API Health *(coming soon)*
-   - DNS Checker *(coming soon)*
-   - SSL Checker *(coming soon)*
+### VPS cron — es3 (es3-auth)
 
-3. **Done!** Monitors run automatically on schedule.
+| Monitor | Script | Schedule | Alerts via |
+|---------|--------|----------|------------|
+| Backup verification | `backup-system/verify-all-backups.sh` | 06:00 UTC daily | `satoshi-notify.sh` |
+| Per-server backups (×6) | `backup-system/backup-*.sh` | after each backup run | `satoshi-notify.sh` |
+| Security checks | `security-check-all.sh` | 06:30 UTC daily | `satoshi-notify.sh` → `/root/telegram-notify.sh` |
 
-### Test a Monitor Manually
+### VPS cron — RN1
 
-1. Go to **Actions** tab
-2. Select the workflow (e.g., "Daily Link Check")
-3. Click **Run workflow**
-4. Check Telegram group in ~30 seconds
+| Monitor | Script | Schedule | Alerts via |
+|---------|--------|----------|------------|
+| DS donation reconciliation | `server-scripts/rn1/reconcile-notify.sh` | Sunday 03:00 UTC | DS_AuthBot → Telegram |
+| DS new posts | `server-scripts/rn1/notify-new-posts.py` | hourly | SitesCheckBot → Telegram |
 
----
+### Uptime Kuma — es2
 
-## 📋 Monitors Overview
-
-### Link Checker
-Randomly checks 2 links daily from your PTC page to ensure they're working. Skips paid links.
-
-- **What it checks:** 2 random links from clickforcharity.net/ptc.html
-- **Excludes:** Rotate5url.com, Rotate4All (paid links)
-- **Frequency:** Daily at 9 AM UTC
-- **Notifications:** All OK messages + error alerts
-- **Setup:** [Read full setup here](docs/SETUP-links.md)
-
-### (More monitors will go here as they're added)
+Member-facing uptime monitoring and status pages for SatoshiHost users, at https://uptime.satoshihost.com/dashboard.
+Internal server monitoring is planned to move to checkmk, alongside Hermes.
+Status, problems and to-do list: [UPTIME-KUMA.md](UPTIME-KUMA.md)
 
 ---
 
-## 🔐 Security
+## Shared Notification Helper
 
-**Telegram credentials are protected:**
-- Stored in GitHub Secrets (encrypted)
-- Never visible in logs or code
-- Only accessible to workflows
-- Safe to reuse same bot for multiple monitors
+`notify.sh` is the canonical alerting helper. It is deployed to `/usr/local/lib/satoshi-notify.sh`
+on all 5 servers (es1, es3-auth, es5, es7, RN1).
 
-**All scripts:**
-- Are open source (in this repo)
-- Don't store sensitive data locally
-- Report via Telegram only
-- Use standard HTTP requests (no sketchy libraries)
-
----
-
-## 🛠️ Adding a New Monitor
-
-When you want to add another monitor:
-
-1. Create a new script: `scripts/your_checker.py`
-2. Create a workflow: `.github/workflows/your_check.yml`
-3. Create docs: `docs/SETUP-your_check.md`
-4. Update this README with the new monitor in the table above
-5. Test it manually first (Actions tab → Run workflow)
-
-Each monitor follows the same pattern - see Link Checker as a template.
-
----
-
-## 📊 Telegram Messages
-
-You'll receive messages like:
-
-**✅ All Good:**
-```
-✅ PTC Links Check OK
-Checked 2 random links on 2026-03-20 09:00 UTC
-All working!
+```bash
+source /usr/local/lib/satoshi-notify.sh
+notify "✅ Title" "Optional body text"
 ```
 
-**❌ Something Broken:**
-```
-❌ PTC Links Check FAILED
-Time: 2026-03-20 09:00 UTC
+Tries Telegram first; would fall back to Matrix if `/root/.matrix-alerts` existed (it currently doesn't — dormant).
 
-❌ https://example.com
-   Status: CONNECTION_ERROR
-
-✅ https://otherlink.com
+To re-deploy after changes:
+```bash
+/home/andy/work/monitors/deploy-notify.sh
+# after rotating the Telegram token:
+TELEGRAM_CREDS_FILE=~/.telegram-backup-alerts /home/andy/work/monitors/deploy-notify.sh
 ```
 
 ---
 
-## 🐛 Troubleshooting
+## Repo Structure
 
-**Monitor isn't running?**
-- Check **Actions** tab for workflow status
-- Verify secrets are added (Settings → Secrets)
-- Check the specific monitor's setup doc
-
-**No Telegram message?**
-- Run workflow manually to test (Actions → Run workflow)
-- Check that both secrets exist and have correct values
-- Look at workflow logs for errors
-
-**Getting random errors?**
-- Some links might block automated checks
-- Intermittent network issues are normal
-- Pattern of failures = real problem
-
-See specific monitor docs for detailed troubleshooting.
-
----
-
-## 📝 Contributing
-
-To add a new monitor or improve existing ones:
-
-1. Test locally first
-2. Add clear comments in code
-3. Include setup documentation
-4. Update this README
-5. Test the workflow in GitHub Actions before merging
+```
+notify.sh                        # Shared alert helper — canonical source
+deploy-notify.sh                 # Deploys notify.sh to all 5 servers
+check_links.py                   # GitHub Actions: CFC PTC link checker
+.github/workflows/
+  check_links.yml                # Workflow for link checker
+server-scripts/
+  rn1/
+    reconcile-notify.sh          # DS reconciliation cron (RN1)
+    notify-new-posts.py          # DS new-post notifier (RN1)
+docs/
+  SETUP-links.md                 # Link checker setup guide
+ALERTING-PLAN.md                 # Full architecture, credentials, history
+UPTIME-KUMA.md                   # Uptime Kuma on es2 — member-facing monitoring
+github-push-checks.md            # Plan: org-wide push CI → Telegram (not yet built)
+```
 
 ---
 
-## 📚 Resources
+## Link Checker — Quick Reference
 
-- [GitHub Actions Documentation](https://docs.github.com/en/actions)
-- [Cron Syntax Reference](https://crontab.guru/)
-- [Telegram Bot API](https://core.telegram.org/bots/api)
+Checks 2 random links on [clickforcharity.net/ptc.html](https://clickforcharity.net/ptc.html)
+to confirm they are reachable. Skips paid rotation links.
+
+- Run manually: **Actions tab → Daily Link Check → Run workflow**
+- Needs GitHub secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+- Full setup: [docs/SETUP-links.md](docs/SETUP-links.md)
 
 ---
 
-**Last Updated:** 2026-03-20  
-**Maintained by:** SatoshiHost Team  
-**Cost:** $0 (GitHub Actions free tier)
+**Last updated:** 2026-05-23
